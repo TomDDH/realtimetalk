@@ -14,14 +14,55 @@ function App() {
   const bgImage = './assets/images/Gemini_Generated_Image_z36bgmz36bgmz36b.png'
   // console.log('isIframe', window.top)
 
+
+  function isValidOrigin(origin) {
+    if (!origin) {
+      return false;
+    }
+
+    try {
+      const parsed = new URL(origin);
+      return Boolean(parsed.origin) && parsed.origin !== "null";
+    } catch {
+      return false;
+    }
+  }
+
+
+  const getBootstrapParentOrigin = () => {
+
+    try {
+      const url = new URL(window.location.href);
+      console.log('Bootstrap URL:', url.href);
+      const parentOrigin = url.searchParams.get("parentOrigin");
+      return isValidOrigin(parentOrigin) ? parentOrigin : null;
+    } catch {
+      return null;
+    }
+
+  }
+
   useEffect(() => {
-    const threeModule = new ThreejsModule({
-      container: containerRef.current,
-      setLoading,
-      setIsPending,
-      setSpeakStates,
-    })
-    threeModuleRef.current = threeModule
+    const expectedParentOrigin = getBootstrapParentOrigin();
+    if (!expectedParentOrigin) {
+      window.parent.postMessage({
+        type: "error",
+        message: "Missing or invalid parentOrigin parameter in URL",
+      }, "*");
+
+      console.error("Missing or invalid parentOrigin parameter in URL");
+
+
+    } else {
+      const threeModule = new ThreejsModule({
+        container: containerRef.current,
+        setLoading,
+        setIsPending,
+        setSpeakStates,
+      })
+      threeModuleRef.current = threeModule
+
+    }
 
     return () => {
       threeModule.cleanup()

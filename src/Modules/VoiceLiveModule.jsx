@@ -6,21 +6,14 @@ import VisemeClip from "./VisemeClip";
 
 class VoiceLiveModule {
     constructor() {
-
-        this.config = null;
-        this.client = null;
-        this.session = null;
-        this.subscription = null;
-        this.audioCapture = null
-        this.callbacks = null
-        this.isConnected = false
-        this.isConversationActive = false
         this.audioContext = null
         this.audioQueue = []
+
         this.isPlayingAudio = false
         this.nextAudioStartTime = 0
         this.nextVisemeStartTimeMs = 0
         this.currentAudioSources = []
+        this.ws = null
 
         this.targetSampleRate = 24000
         this.targetChannels = 1
@@ -33,15 +26,14 @@ class VoiceLiveModule {
         this.onTalking = () => { }
         this.onFinishedTalking = () => { }
         this.onMediaCaptureStarted = () => { }
+
         this.collectedVisemeEvents = []
         this.avatariFrame = new AvatarToiFrameEvents();
 
         this.greetingSent = false;
-        this.sessionID = ''
 
         this.bargeIn = false;
 
-        this.assistantSpeakingMessage = ''
 
         this.sessionTimeout = null;
         this.visemeClip = new VisemeClip()
@@ -49,359 +41,277 @@ class VoiceLiveModule {
         this.chunkStartTime = 0
 
         this.isSpeaking = false
+
+        this.playAudioContext = new AudioContext();
     }
 
-    buildConfig(payload) {
-        if (!payload || !payload.systemPrompt || !payload.model || !payload.endpoint || !payload.apiKey || !payload.voice) {
-            console.error('Invalid configuration payload:', payload);
+
+    handleVisemDelta(event) {
+        // console.log("handle audio delta event:", event);
+        const animation = event;
+        const audioOffsetInMs = animation.audioOffsetInMs
+        this.collectedVisemeEvents.push({ uuid: crypto.randomUUID(), timeout: null, visemeId: animation.visemeId, audioOffsetInMs });
+        this.visemeClip.push({ time: audioOffsetInMs, value: animation.visemeId })
+
+    }
+
+    async handleAudioDelta(event) {
+        // console.log("handle audio delta event:", event);
+        const audioBase64 = event.delta;
+        const samples = this.base64Pcm16ToFloat32(audioBase64);
+        await this.playAudioChunk(samples);
+
+    }
+    base64Pcm16ToFloat32(base64) {
+        const buffer = this.decodeBase64ToArrayBuffer(base64);
+        if (!buffer) {
             return null;
         }
 
-        const config = {
-            model: payload.model,
-            endpoint: payload.endpoint,
-            apiKey: payload.apiKey,
-            voice: payload.voice,
-            welcomeMessage: payload.welcomeMessage,
-            instructions: payload.systemPrompt,
-            debugMode: payload.debugMode,
-            sessionDuration: payload.sessionDuration || 10, // default to 30 minutes
-            useTokenCredential: payload.useTokenCredential
-        };
-        this.config = config;
+        const view = new DataView(buffer);
+        const samples = new Float32Array(buffer.byteLength / 2);
 
-        console.log('Built configuration for Voice Live Module:', config);
+        for (let index = 0; index < samples.length; index += 1) {
+            samples[index] = view.getInt16(index * 2, true) / 0x8000;
+        }
 
-        return config;
+        return samples;
+    }
+
+    decodeBase64ToArrayBuffer(value) {
+        if (typeof value !== "string" || !value) {
+            return null;
+        }
+
+        try {
+            const binary = atob(value);
+            const bytes = new Uint8Array(binary.length);
+
+            for (let index = 0; index < binary.length; index += 1) {
+                bytes[index] = binary.charCodeAt(index);
+            }
+
+            return bytes.buffer;
+        } catch {
+            return null;
+        }
     }
 
     async connect(payload) {
-        if (this.sessionTimeout) {
-            clearTimeout(this.sessionTimeout);
-            this.sessionTimeout = null;
-        }
-        this.greetingSent = false
-        this.assistantSpeakingMessage = ''
-        console.log('Connecting to Voice Live service...', { payload });
+        console.log('Connecting to Voice Live service with payload:', payload);
 
-        const {
-            sessionId
-        } = payload || {}
-
-        const config = this.buildConfig(payload)
-
-        if (!config) {
+        if (!payload.webSocketTarget) {
+            console.error("Connect message missing wsUrl.");
             this.avatariFrame.sendToHost({
-                type: "Error",
-                text: "Invalid configuration for Voice Live Module"
+                type: "error",
+                message: "Connect message missing wsUrl."
             })
-            return Promise.reject(new Error('Invalid configuration payload'));
+            this.avatariFrame.addLog("Connect message missing wsUrl.", "error");
+            return;
         }
 
-        const tools = [
-            {
-                type: "function",
-                name: "get_who_are_you",
-                description: "Answer \"Who are you?\" question, If user asks.",
-            },
-        ];
+
+        if (this.ws) {
+            this.avatariFrame.addLog("Existing WebSocket connection found. Closing it before establishing a new one.", "system");
+            this.ws.close();
+            this.end("New session started");
+
+        }
+
+        this.avatariFrame.addLog(`Connecting to ${payload.webSocketTarget}...`, "system");
 
 
-        this.sessionID = sessionId
-        this.avatariFrame.sessionID = sessionId
+        try {
+            this.ws = new WebSocket(payload.webSocketTarget);
 
-        const credential = new AzureKeyCredential(config.apiKey);
-        const sessionOptions = {
-            connectionTimeoutInMs: 30000,
-            enableDebugLogging: true // Enable by default
+        } catch (error) {
+            const message = error ? error.message : String(error);
+            console.error('WebSocket connection failed:', message);
+            this.avatariFrame.addLog(`Failed to connect: ${message}`, "error");
+            this.avatariFrame.sendToHost({
+                type: "error",
+                message: message
+            })
 
-        };
-        this.client = new VoiceLiveClient(config.endpoint, credential, {
-            apiVersion: '2025-10-01',
-            defaultSessionOptions: sessionOptions
+            return;
+        }
+
+        this.ws.addEventListener("open", () => {
+            this.avatariFrame.addLog("Connected.", "system");
+            this.avatariFrame.sendToHost({
+                type: "connected",
+                message: "Avatar Connected to websocket successfully"
+            })
+
+            console.log('WebSocket connection established successfully', this.ws);
+            this.start()
+
         });
 
-        this.session = await this.client.startSession(config.model, sessionOptions);
-        this.subscription = this.session.subscribe(this.createEventHandlers());
+        this.ws.addEventListener("error", () => {
+            this.avatariFrame.sendToHost({
+                type: "error",
+                message: "WebSocket error occurred."
+            })
+            this.avatariFrame.addLog("WebSocket error occurred.", "error");
+        });
 
+        this.ws.addEventListener("close", (event) => {
+            this.avatariFrame.sendToHost({
+                type: "disconnected",
+                code: event.code,
+                reason: event.reason
+            })
+            this.avatariFrame.addLog(`Disconnected (code: ${event.code}${event.reason ? `, reason: ${event.reason}` : ""}).`, "system");
+            this.ws = null
+        });
 
-        const voice = {
-            type: 'azure-standard',
-            name: config.voice
-        }
+        this.ws.addEventListener("message", (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+                // console.log("Received message from WebSocket:", msg.eventType);
+                this.avatariFrame.postDiagnostics({ lastServerEventType: msg?.eventType ? `${msg.type}:${msg.eventType}` : String(msg?.type ?? "unknown") });
 
-        await this.session.updateSession({
-            modalities: ['audio', 'text'],
-            instructions: config.instructions,
-            voice: voice, // Now using proper voice object
-            inputAudioFormat: 'pcm16',
-            outputAudioFormat: 'pcm16',
-            animation: {
-                outputs: ["viseme_id"]
-            },
-            tools: tools,
-            toolChoice: "auto",
-            turnDetection: {
-                type: 'server_vad',
-                threshold: 0.5,
-                prefixPaddingMs: 300,
-                silenceDurationMs: 500,
-                autoTruncate: true,
-                appendedTextAfterTruncation: "[The user interrupted me.]"
+                if (msg?.type === "azureEvent") {
+                    switch (msg?.eventType) {
+                        case 'response.animation_viseme.delta':
+                            this.handleVisemDelta(msg);
+                            break;
+                        case 'response.audio.delta':
+                            this.handleAudioDelta(msg.event);
+                            break;
+                        case 'response.created':
+                            this.collectedVisemeEvents = [];
+                            this.visemeClip.reset()
+                            this.bargeIn = false;
+                            break;
+                        case 'conversation.item.truncated':
+                            this.audioQueue = [];
+                            this.collectedVisemeEvents.forEach(ev => {
+                                if (ev?.timeout) {
+                                    clearTimeout(ev?.timeout);
+                                }
+                            })
+                            this.updateViseme(0);
+                            this.collectedVisemeEvents = [];
+                            this.bargeIn = true;
+                            this.assistantSpeakingMessage = ''
+
+                            const itemId = typeof msg.itemId === "string" ? msg.itemId : "";
+                            const audioEndMs = Number.isFinite(msg.audioEndMs) ? msg.audioEndMs : null;
+                            const suffix = itemId ? ` Item: ${itemId}${audioEndMs === null ? "" : `, audioEndMs: ${audioEndMs}`}.` : "";
+
+                            this.avatariFrame.addLog(`Azure truncated the avatar response.${suffix}`, "system");
+
+                            break;
+                        default:
+                            break;
+                    }
+
+                }
+                const normalizedEvent = this.findFirstObjectByKeyDeep(msg);
+
+                if (normalizedEvent) {
+                    console.log("Received non-azureEvent message from WebSocket:", msg);
+                    switch (normalizedEvent.type) {
+                        case 'responseStarted':
+                            console.log("Response started:", normalizedEvent);
+                            this.avatariFrame.addLog("Server event: response started.", "system");
+                            break;
+                        case 'transcript':
+                            console.log("Transcript received:", normalizedEvent);
+                            break;
+                        case 'responseCompleted':
+                            console.log("Response completed:", normalizedEvent);
+                            this.avatariFrame.addLog("Server event: response completed.", "system");
+                            break;
+                        case 'error':
+                            console.log("Error received:", normalizedEvent);
+                            this.avatariFrame.sendToHost({
+                                type: "error",
+                                event: normalizedEvent?.message
+                            })
+                            this.avatariFrame.addLog(`Server error: ${normalizedEvent.message}`, "error");
+                            break;
+                        default:
+                            break;
+                    }
+
+                }
+
+                switch (msg.type) {
+                    case "ready":
+                        console.log("Session is ready:", msg);
+                        this.avatariFrame.addLog("Server: ready.", "system");
+                        break;
+                    case "azureEvent":
+                        break;
+                    case "sessionEnded":
+                        this.avatariFrame.addLog("Server: session ended.", "system");
+                        console.log("Session ended:", msg);
+                        this.end()
+                        break;
+                    default:
+                        this.avatariFrame.addLog(`Server: ${msg.type ?? "unknown event"}`, "system");
+                        console.log("Received message from WebSocket:", msg);
+                }
+
+                this.avatariFrame.sendToHost({
+                    type: "event",
+                    event: normalizedEvent
+                })
+            } catch {
+                this.avatariFrame.addLog("Server sent a non-JSON message.", "system");
+                console.log("Server sent a non-JSON message.", "system");
             }
         });
 
-
-        this.isConnected = true;
-        this.sessionTimeout = setTimeout(() => {
-            console.log('Session timeout reached, ending session');
-            this.end();
-        }, config.sessionDuration * 60 * 1000) // session timeout based on configuration
-
-    }
-    createEventHandlers() {
-        return {
-
-            onConnected: async (args, context) => {
-                console.log('🔔 Connected:', args);
-            },
-            onDisconnected: async (args, context) => {
-                console.log('🔔 Disconnected:', args);
-            },
-            onError: async (args, context) => {
-                console.log('🔔 Error:', args);
-                this.avatariFrame.sendToHost({
-                    type: "Error",
-                    ...args,
-                    message: "Connection error with Voice Live service. Please try again later."
-                })
-            },
-            onServerError: async (args, context) => {
-                //  Called when an error event is received from the server
-            },
-            onSessionCreated: async (event, context) => {
-                // Called when the session is created on the server
-
-            },
-            onSessionUpdated: async () => {
-                // console.log('🔔 Session Updated');
-                this.onSessionReady()
-            },
-
-            onInputAudioBufferCommitted: async (event, context) => {
-                // Called when the input audio buffer is committed
-            },
-            onInputAudioBufferCleared: async (event, context) => {
-
-            },
-            onInputAudioBufferSpeechStarted: async (event, context) => {
-                // console.log('🔔 Speech Started:');
-                this.currentUserTranscription = ''; // Reset transcription
-                this.systemTurnMessage = ''
-
-            },
-            onInputAudioBufferSpeechStopped: async (event, context) => {
-                // Called when speech stops being detected in the user's audio input
-            },
-            onConversationItemCreated: async (event, context) => {
-                this.bargeIn = false;
-                console.log('🔔 Conversation Item Created:', event);
-                // Called when a conversation item is created
-            },
-            onConversationItemInputAudioTranscriptionCompleted: async (event, context) => {
-                console.log('🔔 User Transcription Completed:', event);
-
-                this.avatariFrame.sendToHost({
-                    type: "userTurnCompleted",
-                    text: event.transcript,
-                })
-                this.currentUserTranscription = event.transcript; // Store the final transcription result
-            },
-            onConversationItemInputAudioTranscriptionFailed: async (event, context) => {
-                // Called when transcription of user audio input fails
-
-            },
-            onConversationItemInputAudioTranscriptionDelta: async (event, context) => {
-                console.log('🔔 User Transcription Delta:', event.delta);
-                // const message = event.transcript
-
-            },
-
-            onConversationItemTruncated: async (event, context) => {
-                console.log('🔔 Conversation Item Truncated:', event);
-                this.audioQueue = [];
-                this.collectedVisemeEvents.forEach(ev => {
-                    if (ev?.timeout) {
-                        clearTimeout(ev?.timeout);
-                    }
-                })
-                this.updateViseme(0);
-                this.collectedVisemeEvents = [];
-                this.avatariFrame.sendToHost({
-                    type: "bargeIn",
-                    bargeInMessage: this.assistantSpeakingMessage,
-                })
-                this.bargeIn = true;
-                this.assistantSpeakingMessage = ''
-            },
-            onConversationItemDeleted: async (event, context) => {
-
-            },
-            onConversationItemRetrieved: async (event, context) => {
-
-            },
-            onResponseCreated: async (event, context) => {
-                console.log('🔔 new Response Created:', event);
-                this.collectedVisemeEvents = [];
-                this.visemeClip.reset()
-                this.assistantSpeakingMessage = ''
-            },
-            onResponseDone: async (event, context) => {
-
-            },
-            onResponseOutputItemAdded: async (event, context) => {
-
-            },
-            onResponseOutputItemDone: async (event, context) => {
-
-            },
-            onResponseContentPartAdded: async (event, context) => {
-
-            },
-            onResponseContentPartDone: async (event, context) => {
-
-            },
-            onResponseTextDelta: async (event, context) => {
-                // console.log('🔔 Response Text Delta:', event.delta);
-
-            },
-            onResponseTextDone: async (event, context) => {
-
-            },
-            onResponseAudioDelta: async (event, context) => {
-                if (event.delta && event.delta.byteLength > 0) {
-                    const audioBuffer = new ArrayBuffer(event.delta.byteLength);
-                    const view = new Uint8Array(audioBuffer);
-                    view.set(event.delta);
-                    await this.playAudioChunk(audioBuffer);
-                } else {
-                    console.warn('🔊 Empty or invalid audio chunk received');
-                }
-            },
-            onResponseAudioDone: async (event, context) => {
-
-            },
-            onResponseAudioTranscriptDelta: async (event, context) => {
-                // console.log('🔔 Audio Transcript Delta:', event.delta);
-                this.assistantSpeakingMessage = this.assistantSpeakingMessage + event.delta
-            },
-            onResponseAudioTranscriptDone: async (event, context) => {
-                // console.log('🔔 User onResponseAudioTranscriptDone Completed:', event);
-
-                // console.log("assistant final message", event.transcript)
-                // this.assistantSpeakingMessage = event.transcript
-            },
-            onResponseAnimationVisemeDone: async (event) => {
-                console.log("end play visme done", this.visemeClip)
-            },
-            onResponseAnimationVisemeDelta: async (event) => {
-                const animation = event;
-                const audioOffsetInMs = animation.audioOffsetInMs
-                this.collectedVisemeEvents.push({ uuid: crypto.randomUUID(), timeout: null, visemeId: animation.visemeId, audioOffsetInMs });
-                this.visemeClip.push({ time: audioOffsetInMs, value: animation.visemeId })
-            },
-            onResponseFunctionCallArgumentsDone: async (event, context) => {
-                if (event.name === "get_who_are_you") {
-                    const args = JSON.parse(event.arguments);
-                    console.log("Function call arguments received for 'get_who_are_you':", args);
-
-                    this.session.addConversationItem({
-                        type: "function_call_output",
-                        callId: event.callId,
-                        output: "you are an AI assistant created by aCauch, who is a AI assistant to help user understand company products.",
-                    });
-
-                    // Request response generation
-                    this.session.sendEvent({
-                        type: "response.create",
-                    });
-                }
-
-                this.avatariFrame.sendToHost({
-                    type: "MCPFunctionCalled",
-                    functionName: event.name,
-                    args: { ...args },
-                })
-            },
-            onServerEvent: async (event, context) => {
-
-                // if (event.type.endsWith("done")) {
-                //     console.log("Server event:", event);
-                // }
-            },
-        }
     }
 
-    sendTextChat() {
-        console.log("send text message")
-        this.session.addConversationItem({
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "Can you tell me a story?" }]
-        });
-        this.session.sendEvent({ type: "response.create" });
-    }
     sendGreeting() {
         console.log("send greeting message")
 
-        this.session.sendEvent({
-            type: 'response.create',
-            response: {
-                preGeneratedAssistantMessage: {
-                    content: [
-                        {
-                            type: "text",
-                            text: this.config.welcomeMessage || "Hello! I'm your AI assistant. How can I help you today?"
-                        }
-                    ]
-                }
-            }
-        })
+        this.ws.send(JSON.stringify({ type: "sendText", text: "hello, Who are you?" }));
+        this.avatariFrame.addLog(`You: sendText (hello, Who are you?)`, "system");
+        // this.avatariFrame.addLog(`You: sendText (${message})`, "system");
+        // this.session.sendEvent({
+        //     type: 'response.create',
+        //     response: {
+        //         preGeneratedAssistantMessage: {
+        //             content: [
+        //                 {
+        //                     type: "text",
+        //                     text: this.config.welcomeMessage || "Hello! I'm your AI assistant. How can I help you today?"
+        //                 }
+        //             ]
+        //         }
+        //     }
+        // })
     }
     async playAudioChunk(audioData) {
-
         if (!this.playAudioContext) {
             console.warn('AudioContext not available for audio playback');
             return;
         }
-
         try {
             const sampleRate = 24000; // VoiceLive default output sample rate
             const numberOfChannels = 1; // Mono audio
             const byteLength = audioData.byteLength;
-            const numberOfSamples = byteLength / 2; // 16-bit = 2 bytes per sample
+            const numberOfSamples = byteLength / 4; // 16-bit = 2 bytes per sample
 
             if (numberOfSamples === 0) {
                 console.warn('Empty audio chunk received');
                 return;
             }
 
-            // Create AudioBuffer for the PCM data
+            // // Create AudioBuffer for the PCM data
             const audioBuffer = this.playAudioContext.createBuffer(
                 numberOfChannels,
                 numberOfSamples,
                 sampleRate
             );
 
-            // Convert Int16 PCM data to Float32 for Web Audio API
-            const pcm16Data = new Int16Array(audioData);
-            const float32Data = audioBuffer.getChannelData(0);
-
-            for (let i = 0; i < numberOfSamples; i++) {
-                // Convert from Int16 (-32768 to 32767) to Float32 (-1.0 to 1.0)
-                float32Data[i] = pcm16Data[i] / 32768.0;
-            }
-
+            audioBuffer.copyToChannel(audioData, 0);
             // Add to audio queue instead of playing immediately
             this.audioQueue.push(audioBuffer);
 
@@ -421,7 +331,6 @@ class VoiceLiveModule {
 
         this.isPlayingAudio = true;
 
-
         this.onTalking()
 
         this.nextVisemeStartTimeMs = 0
@@ -438,7 +347,6 @@ class VoiceLiveModule {
     playNextAudioChunk() {
         if (!this.playAudioContext || this.audioQueue.length === 0) {
             this.isPlayingAudio = false;
-
             this.playNextViseme([{
                 visemeId: 0,
                 audioOffsetInMs: 100
@@ -450,7 +358,6 @@ class VoiceLiveModule {
             if (!this.bargeIn) {
                 this.avatariFrame.sendToHost({
                     type: "assistantTurnCompleted",
-                    text: this.assistantSpeakingMessage,
                     timestampUtc: new Date().toISOString()
                 })
             }
@@ -517,12 +424,8 @@ class VoiceLiveModule {
     }
 
     async start() {
-        if (!this.session || !this.isConnected) {
-            throw new Error('Not connected to Voice Live service');
-        }
 
         try {
-
             this.mediaStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     channelCount: this.targetChannels,
@@ -531,11 +434,13 @@ class VoiceLiveModule {
                     noiseSuppression: true
                 }
             });
-
-            // Create audio context
             this.audioContext = new AudioContext({ sampleRate: this.targetSampleRate });
 
-            this.playAudioContext = new AudioContext();
+
+            this.avatariFrame.postDiagnostics({ mediaStatus: "ready", mediaError: undefined });
+            this.avatariFrame.addLog(`Media ready. Capture ${this.audioContext.sampleRate}Hz -> send ${16000}Hz PCM16 mono.`, "system");
+
+            // Create audio context
 
             // Create nodes
             const source = this.audioContext.createMediaStreamSource(this.mediaStream);
@@ -549,82 +454,107 @@ class VoiceLiveModule {
             this.analyserNode.connect(this.scriptProcessor);
             this.scriptProcessor.connect(this.audioContext.destination);
 
+
+
             this.scriptProcessor.onaudioprocess = (event) => {
-
-                const inputBuffer = event.inputBuffer;
-                const inputData = inputBuffer.getChannelData(0);
-
-                // Convert to the format needed by Voice Live (PCM16)
-                const pcm16Data = this.convertToPCM16(inputData);
-
-
-                // Ensure we have an ArrayBuffer, not SharedArrayBuffer
-                let buffer;
-                if (pcm16Data.buffer instanceof ArrayBuffer) {
-                    buffer = pcm16Data.buffer.slice(pcm16Data.byteOffset, pcm16Data.byteOffset + pcm16Data.byteLength);
-                } else {
-                    // Convert SharedArrayBuffer to ArrayBuffer
-                    const tempArray = new Uint8Array(pcm16Data);
-                    buffer = tempArray.buffer.slice(tempArray.byteOffset, tempArray.byteOffset + tempArray.byteLength);
-                }
-                this.sendAudioData(buffer);
-
+                // console.log("processing")
+                const audio = this.float32ToPcm16Base64(
+                    event.inputBuffer.getChannelData(0),
+                    event.inputBuffer.sampleRate,
+                    16000
+                );
+                this.ws.send(JSON.stringify({ type: "sendAudioChunk", audio }));
             };
 
             if (!this.greetingSent) {
                 this.greetingSent = true
                 this.sendGreeting()
             }
-            this.avatariFrame.sendToHost({
-                type: "mediaCaptureStarted",
-            })
+
+            this.avatariFrame.mediaStatus = 'ready'
+            this.avatariFrame.mediaErrorMessage = ''
+            this.avatariFrame.audioActive = true
+
+            this.avatariFrame.postDiagnostics({ mediaStatus: 'ready', audioActive: true });
+            this.avatariFrame.addLog("Microphone streaming started.", "system");
 
         } catch (error) {
-            this.avatariFrame.sendToHost({
-                type: "Error",
-                reason: 'Session Connection Error'
-            })
+            this.avatariFrame.mediaStatus = 'error'
+            this.avatariFrame.mediaErrorMessage = error instanceof Error ? error.message : String(error);
+
+            this.avatariFrame.postDiagnostics({ mediaStatus: "error", mediaError: this.avatariFrame.mediaErrorMessage, audioActive: false });
+            this.avatariFrame.addLog(`Media error: ${this.avatariFrame.mediaErrorMessage}`, "error");
         }
 
     }
 
-    async sendAudioData(audioData) {
-        console.log("sending audio")
-        if (!this.session) return;
-        try {
-            // Convert ArrayBuffer to Uint8Array for sending
-            const audioBytes = new Uint8Array(audioData);
-            await this.session.sendAudio(audioBytes);
+    float32ToPcm16Base64(input, sourceSampleRate, targetSampleRate = 16000) {
+        const monoSamples = this.downsampleFloat32Buffer(input, sourceSampleRate, targetSampleRate);
+        const buffer = new ArrayBuffer(monoSamples.length * 2);
+        const view = new DataView(buffer);
 
-        } catch (error) {
-            console.error('Failed to send audio data:', error);
-        }
-    }
-
-    convertToPCM16(floatData) {
-        const pcm16 = new Int16Array(floatData.length);
-
-        for (let i = 0; i < floatData.length; i++) {
-            // Convert float (-1 to 1) to int16 (-32768 to 32767)
-            const sample = Math.max(-1, Math.min(1, floatData[i]));
-            pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+        for (let index = 0; index < monoSamples.length; index += 1) {
+            const sample = Math.max(-1, Math.min(1, monoSamples[index]));
+            view.setInt16(index * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
         }
 
-        return pcm16;
+        return this.encodeArrayBufferToBase64(buffer);
     }
+    encodeArrayBufferToBase64(arrayBuffer) {
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = "";
+
+        for (let index = 0; index < bytes.length; index += 4096) {
+            const chunk = bytes.subarray(index, index + 4096);
+            binary += String.fromCharCode(...chunk);
+        }
+
+        return btoa(binary);
+    }
+
+    downsampleFloat32Buffer(input, sourceSampleRate, targetSampleRate) {
+        if (!(input instanceof Float32Array) || input.length === 0) {
+            return new Float32Array();
+        }
+
+        if (!Number.isFinite(sourceSampleRate) || !Number.isFinite(targetSampleRate)) {
+            return input;
+        }
+
+        if (targetSampleRate <= 0 || sourceSampleRate <= 0 || targetSampleRate >= sourceSampleRate) {
+            return input;
+        }
+
+        const sampleRateRatio = sourceSampleRate / targetSampleRate;
+        const outputLength = Math.max(1, Math.round(input.length / sampleRateRatio));
+        const output = new Float32Array(outputLength);
+
+        let outputIndex = 0;
+        let inputIndex = 0;
+
+        while (outputIndex < outputLength) {
+            const nextInputIndex = Math.min(input.length, Math.round((outputIndex + 1) * sampleRateRatio));
+            let accumulator = 0;
+            let sampleCount = 0;
+
+            while (inputIndex < nextInputIndex) {
+                accumulator += input[inputIndex];
+                sampleCount += 1;
+                inputIndex += 1;
+            }
+
+            output[outputIndex] = sampleCount > 0 ? accumulator / sampleCount : input[Math.min(inputIndex, input.length - 1)];
+            outputIndex += 1;
+        }
+
+        return output;
+    }
+
 
     end(reason = "Session Expired") {
 
-        if (!this.session || !this.isConnected) {
-
-            this.avatariFrame.sendToHost({
-                type: "Error",
-                reason: 'Not connected Session to end'
-            })
-            throw new Error('Not connected to Voice Live service');
-
-        }
         this.clearAudioQueue();
+
         if (this.playAudioContext) {
             this.playAudioContext.close();
             this.playAudioContext = undefined;
@@ -643,11 +573,12 @@ class VoiceLiveModule {
             visemeId: 0,
             audioOffsetInMs: 100
         }], 1)
+        this.avatariFrame.audioActive = false
+
+        this.avatariFrame.postDiagnostics({ audioActive: false })
         this.onFinishedTalking()
-        this.isConnected = false;
     }
     clearAudioQueue() {
-
         this.currentAudioSources.forEach(source => {
             try {
                 source.stop();
@@ -655,15 +586,209 @@ class VoiceLiveModule {
                 // Source might already be stopped, ignore the error
             }
         });
-
         this.currentAudioSources = [];
         this.audioQueue = [];
         this.isPlayingAudio = false;
-
         this.nextAudioStartTime = this.audioContext.currentTime;
     }
 
+    normalizeServerEvent(message) {
+        if (!message || typeof message !== "object") {
+            return null;
+        }
 
+        if (message.type === "userTranscript") {
+            const text = typeof message.text === "string" ? message.text.trim() : "";
+            return text ? { type: "transcript", speaker: "user", text } : null;
+        }
+
+        if (message.type === "error") {
+            return {
+                type: "error",
+                message: typeof message.message === "string" ? message.message : "Unknown server error"
+            };
+        }
+
+        if (message.type !== "azureEvent") {
+            return null;
+        }
+
+        if (message.eventType === "error") {
+            return {
+                type: "error",
+                message: extractTextValue(message, ["message", "error", "detail"]) ?? "Unknown Azure event error"
+            };
+        }
+
+        switch (message.eventType) {
+            case "response.created":
+            case "response.started":
+                return { type: "responseStarted" };
+            case "response.audio_transcript.done": {
+                const text =
+                    this.getEventPayloadValue(message, "transcript") ??
+                    this.getEventPayloadValue(message, "text") ??
+                    this.extractTextValue(message, ["transcript", "text"]);
+                return typeof text === "string" && text ? { type: "transcript", speaker: "assistant", text } : null;
+            }
+            case "conversation.item.input_audio_transcription.completed":
+            case "input_audio_transcription.completed": {
+                const text =
+                    this.getEventPayloadValue(message, "transcript") ??
+                    this.getEventPayloadValue(message, "text") ??
+                    this.extractTextValue(message, ["transcript", "text"]);
+                return typeof text === "string" && text ? { type: "transcript", speaker: "user", text } : null;
+            }
+            case "conversation.item.created": {
+                const text = this.extractUserTranscriptFromConversationItem(message);
+                return typeof text === "string" && text ? { type: "transcript", speaker: "user", text } : null;
+            }
+            case "input_audio_buffer.speech_stopped":
+            case "input_audio_buffer.committed": {
+                const text =
+                    this.getEventPayloadValue(message, "transcript") ??
+                    this.getEventPayloadValue(message, "text") ??
+                    this.extractTextValue(message, ["transcript", "text"]);
+                return typeof text === "string" && text ? { type: "transcript", speaker: "user", text } : null;
+            }
+            case "response.done":
+            case "response.completed":
+                return { type: "responseCompleted" };
+            default:
+                return null;
+        }
+    }
+    getEventPayloadValue(message, key) {
+        if (!message || typeof message !== "object") {
+            return undefined;
+        }
+
+        if (message.payload && typeof message.payload === "object" && key in message.payload) {
+            return message.payload[key];
+        }
+
+        return message[key];
+    }
+    extractTextValue(message, preferredKeys) {
+        for (const candidate of this.getCandidateContainers(message)) {
+            const value = this.findFirstStringByKeys(candidate, preferredKeys);
+            if (value) {
+                return value;
+            }
+        }
+
+        return null;
+    }
+    getCandidateContainers(message) {
+        if (!message || typeof message !== "object") {
+            return [];
+        }
+    }
+
+    extractUserTranscriptFromConversationItem(message) {
+        const item = this.getEventPayloadValue(message, "item") ?? this.findFirstObjectByKeyDeep(message, "item");
+        if (!item || typeof item !== "object") {
+            return null;
+        }
+
+        const role = typeof item.role === "string" ? item.role : "";
+        if (role.toLowerCase() !== "user") {
+            return null;
+        }
+
+        if (!Array.isArray(item.content)) {
+            return null;
+        }
+
+        for (const part of item.content) {
+            if (!part || typeof part !== "object") {
+                continue;
+            }
+
+            const partType = typeof part.type === "string" ? part.type : "";
+            if (
+                partType === "input_text" ||
+                partType === "text" ||
+                partType === "input_audio" ||
+                partType === "audio" ||
+                partType === "input_audio_transcription"
+            ) {
+                const text =
+                    (typeof part.text === "string" && part.text) ||
+                    (typeof part.transcript === "string" && part.transcript) ||
+                    this.findFirstPreferredStringDeep(part, ["transcript", "text"]) ||
+                    null;
+
+                if (text) {
+                    return text;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    findFirstObjectByKeyDeep(value, key, visited = new WeakSet()) {
+        if (!value || typeof value !== "object") {
+            return null;
+        }
+
+        if (visited.has(value)) {
+            return null;
+        }
+
+        visited.add(value);
+
+        if (!Array.isArray(value) && key in value && value[key] && typeof value[key] === "object") {
+            return value[key];
+        }
+
+        if (Array.isArray(value)) {
+            for (const entry of value) {
+                const result = this.findFirstObjectByKeyDeep(entry, key, visited);
+                if (result) {
+                    return result;
+                }
+            }
+            return null;
+        }
+
+        for (const child of Object.values(value)) {
+            const result = this.findFirstObjectByKeyDeep(child, key, visited);
+            if (result) {
+                return result;
+            }
+        }
+
+        return null;
+    }
+
+    findFirstStringByKeys(value, preferredKeys, visited = new WeakSet()) {
+        if (typeof value === "string" && value) {
+            return value;
+        }
+
+        if (!value || typeof value !== "object") {
+            return null;
+        }
+
+        if (visited.has(value)) {
+            return null;
+        }
+
+        visited.add(value);
+
+        for (const key of preferredKeys) {
+            if (key in value) {
+                const result = this.findFirstStringByKeys(value[key], preferredKeys, visited);
+                if (result) {
+                    return result;
+                }
+            }
+        }
+
+        return null;
+    }
 }
 
 export default VoiceLiveModule;

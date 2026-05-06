@@ -48,8 +48,9 @@ class ThreejsModule {
             this.setLoading('done')
             // this.connect()
             this.avatariFrame.sendToHost({
-                type: "iframeReady",
+                type: "ready",
             })
+            this.avatariFrame.postDiagnostics({ audioActive: false });
             this.setSpeakStates('loaded')
         };
 
@@ -169,10 +170,9 @@ class ThreejsModule {
     }
 
 
-
     loadAssets() {
         this.gltfLoader.load(
-            './assets/gavin_viseme.glb',
+            './assets/gavin_viseme3.glb',
             (gltf) => {
                 this.scene.add(gltf.scene)
                 console.log(gltf)
@@ -187,7 +187,6 @@ class ThreejsModule {
                 // this.talkAction.play()
                 // const skeleton = new THREE.SkeletonHelper(gltf.scene);
                 // this.scene.add(skeleton);
-
 
 
                 if (this.body) {
@@ -329,12 +328,17 @@ class ThreejsModule {
         })
     }
     connect(payload) {
-        this.setSpeakStates('connecting')
-        console.log('Connecting to Voice Live service...', { payload });
-        const { sessionId } = payload || {}
-        this.sessionID = sessionId
-        this.avatariFrame.sessionID = sessionId
-        this.voiceAssistant.connect(payload)
+        // this.setSpeakStates('connecting')
+        // console.log('Connecting to Voice Live service...', { payload });
+        // const { sessionId } = payload || {}
+        // this.sessionID = sessionId
+        // this.avatariFrame.sessionID = sessionId
+        // this.voiceAssistant.connect(payload)
+
+        this.voiceAssistant.connect({
+            webSocketTarget: payload.wsUrl
+
+        })
 
     }
     stopConnection() {

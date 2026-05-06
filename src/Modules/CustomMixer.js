@@ -32,8 +32,11 @@ class CustomMixer extends EventDispatcher {
 
         this.leftEye = root.getObjectByName("FACIAL_L_Eye")
         this.rightEye = root.getObjectByName("FACIAL_R_Eye")
+        this.FACIAL_C_LowerLipRotation = root.getObjectByName("FACIAL_C_LowerLipRotation")
         this.eyeLook = null
         this.eyeLookQuaternion = new Quaternion()
+
+        this.FACIAL_C_LowerLipRotationQuaternion = new Quaternion().setFromEuler(new Euler(-0.01, 0, 0))
         // console.log(this.mask)
     }
 
@@ -114,7 +117,18 @@ class CustomMixer extends EventDispatcher {
             const [name, target] = track.name.split('.')
             if (name && target) {
                 // console.log(name, target)
+
+
+
+
                 if (target === "position" || target === "quaternion") {
+                    if (name === 'FACIAL_C_LowerLipRotation' && target === "quaternion") {
+                        console.log(name, target, track)
+                        track.values = [
+                            ...this.FACIAL_C_LowerLipRotationQuaternion.toArray(),
+                            ...this.FACIAL_C_LowerLipRotationQuaternion.toArray()]
+                    }
+
                     const _a = {
                         interpolant: track.createInterpolant(),
                         target: this.root.getObjectByName(name)[target],
@@ -212,14 +226,14 @@ class CustomMixer extends EventDispatcher {
 
         if (this.isExpression) {
             this.learpExpression += 0.003
-            if (this.learpExpression > 0.25) {
-                this.learpExpression = 0.25
+            if (this.learpExpression > 0.22) {
+                this.learpExpression = 0.22
                 this.lastExpression = this.expression
             }
         } else {
             this.learpExpression -= 0.003
-            if (this.learpExpression < 0.1) {
-                this.learpExpression = 0.1
+            if (this.learpExpression < 0.12) {
+                this.learpExpression = 0.12
 
             }
         }
@@ -258,6 +272,11 @@ class CustomMixer extends EventDispatcher {
             this.expressionAction.trackes.forEach((track, i) => {
                 const baseValues = track.interpolant.evaluate(8 / 24)
                 // const learpAmout = this.isExpression ? 0.25 : 0.1
+
+                // if (track.name === 'FACIAL_C_LowerLipRotation') {
+                //     console.log( baseValues)
+                // }
+
                 if (baseValues.length === 4) {
                     const target = new THREE.Quaternion().slerp(new Quaternion(...baseValues), learpAmout + noise * 0.5) // amount
                     track.target.multiply(target)
@@ -294,6 +313,8 @@ class CustomMixer extends EventDispatcher {
             this.idleAction.trackes.forEach((track, i) => {
                 const values = track.interpolant.evaluate(this.idleAction.time)
                 // track.target.set(...values)
+
+
                 if (values.length === 4) {
                     track.target.slerp(new Quaternion(...values), this.learpTransition)
                 } else {
@@ -346,6 +367,11 @@ class CustomMixer extends EventDispatcher {
             this.leftEye.quaternion.slerp(this.eyeLookQuaternion, 0.03)
             this.rightEye.quaternion.slerp(this.eyeLookQuaternion, 0.03)
         }
+
+        // if (this.FACIAL_C_LowerLipRotation) {
+        //     // this.leftEye.quaternion.slerp(this.eyeLook, 0.03)
+        //     this.FACIAL_C_LowerLipRotation.quaternion.slerp(this.FACIAL_C_LowerLipRotationQuaternion, 0.005)
+        // }
 
 
     }

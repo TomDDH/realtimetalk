@@ -8,6 +8,7 @@ function EventsHandler({ threeModuleRef }) {
         const handleMessage = (event) => {
             const hostOrigin = event.origin;
             const payload = event.data;
+            console.log('Received message from host:', payload, 'Origin:', hostOrigin);
             if (!payload || !payload.type) {
                 return;
             }
@@ -15,7 +16,7 @@ function EventsHandler({ threeModuleRef }) {
                 case 'Init':
                     console.log('Received Init message from host:', payload);
                     break;
-                case 'startSession':
+                case 'connect':
                     avatarThreejs.connect(payload)
                     break;
                 case 'stopSession':

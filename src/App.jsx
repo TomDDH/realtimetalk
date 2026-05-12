@@ -7,13 +7,14 @@ function App() {
 
   const [loading, setLoading] = useState('0')
   const [isPending, setIsPending] = useState(false)
+  const [audioReady, setAudioReady] = useState(false)
+
   const threeModuleRef = useRef(null)
   const containerRef = useRef(null)
   const [speakStates, setSpeakStates] = useState('idle') // connected, ready
   const isIframe = window.self !== window.top
   const bgImage = './assets/images/Gemini_Generated_Image_z36bgmz36bgmz36b.png'
   // console.log('isIframe', window.top)
-
 
   function isValidOrigin(origin) {
     if (!origin) {
@@ -44,28 +45,37 @@ function App() {
 
   useEffect(() => {
     const expectedParentOrigin = getBootstrapParentOrigin();
-    if (!expectedParentOrigin) {
-      window.parent.postMessage({
-        type: "error",
-        message: "Missing or invalid parentOrigin parameter in URL",
-      }, "*");
-
-      console.error("Missing or invalid parentOrigin parameter in URL");
-
-
+    if (isIframe) {
+      if (!expectedParentOrigin) {
+        window.parent.postMessage({
+          type: "error",
+          message: "Missing or invalid parentOrigin parameter in URL",
+        }, "*");
+        console.error("Missing or invalid parentOrigin parameter in URL");
+      } else {
+        const threeModule = new ThreejsModule({
+          container: containerRef.current,
+          setLoading,
+          setIsPending,
+          setSpeakStates,
+          setAudioReady
+        })
+        threeModuleRef.current = threeModule
+      }
     } else {
       const threeModule = new ThreejsModule({
         container: containerRef.current,
         setLoading,
         setIsPending,
         setSpeakStates,
+        setAudioReady,
       })
       threeModuleRef.current = threeModule
 
     }
 
     return () => {
-      threeModule.cleanup()
+      threeModuleRef.current.cleanup()
 
     }
   }, [])
@@ -133,6 +143,22 @@ function App() {
             left: "0",
           }}
         >
+          {
+            speakStates === "loaded" && audioReady &&
+            <button
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px",
+              }}
+              onClick={() => {
+                threeModuleRef.current.playAction(0);
+              }}
+            >
+              Play Action</button>
+          }
+
           {
             speakStates === "loaded" &&
             <button

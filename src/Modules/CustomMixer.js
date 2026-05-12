@@ -13,7 +13,6 @@ class CustomMixer extends EventDispatcher {
         this.viseme = 0
         this.learpViseme = 0
 
-        this.talkAction = null
         this.mask = mask.mask
         this.isBlinking = false
         this.blinking = 0
@@ -24,6 +23,7 @@ class CustomMixer extends EventDispatcher {
         this.eyeLipRight = root.getObjectByName("FACIAL_L_EyelidUpperA")
         this.neck = root.getObjectByName("neck_01")
         this.learpTransition = 0.1
+        this.actionLearp = 0
         this.learpExpression = 0
         this.expressionAction = null
         this.lastExpression = 0
@@ -38,43 +38,48 @@ class CustomMixer extends EventDispatcher {
 
         this.FACIAL_C_LowerLipRotationQuaternion = new Quaternion().setFromEuler(new Euler(-0.01, 0, 0))
         // console.log(this.mask)
+        // this.laughAudio = new Audio('./assets/audio/preview.mp3');
+        this.laughAudio = null
+
+        this.onActionEnd = () => { }
+        this.onAudioReady = () => { }
+
+        this.actions = []
+
+        this.playAction = undefined
     }
 
+    async fetchLaughAudio() {
+        if (this.laughAudio) return
+        this.laughAudio = new Audio('./assets/audio/preview.mp3');
+        this.onAudioReady()
+    }
 
+    addActions(clips, body) {
 
-    addTalkAction(clip, root) {
-        this.talkAction = {
-            time: 0,
-            duration: clip.duration,
-            trackes: []
-        }
-
-        clip.tracks.forEach(track => {
-            const [name, target] = track.name.split('.')
-            if (name && target) {
-
-                const _a = {
-                    interpolant: track.createInterpolant(),
-                    target: root.getObjectByName(name)[target],
-                    headTarget: this.headBaseBones.includes(name) ? this.root.getObjectByName(name)[target] : null,
-                    name: name,
-                    default: {
-                        quaternion: root.getObjectByName(name).quaternion,
-                        position: root.getObjectByName(name).position
-                    }
-                }
-                this.talkAction.trackes.push(_a)
+        clips.forEach(clip => {
+            const action = {
+                name: clip.name,
+                duration: clip.duration,
+                time: 0,
+                trackes: []
             }
+            clip.tracks.forEach(track => {
+                const [name, target] = track.name.split('.')
+
+                if (name && (target === "position" || target === "quaternion")) {
+                    const _a = {
+                        interpolant: track.createInterpolant(),
+                        target: body.getObjectByName(name) ? body.getObjectByName(name)[target] : null,
+                        headTarget: this.root.getObjectByName(name) ? this.root.getObjectByName(name)[target] : null,
+                        name: name,
+                    }
+                    action.trackes.push(_a)
+                }
+            })
+            this.actions.push(action)
         })
-
-
-    }
-
-    activeTalking(state) {
-        // this.isTalking = state;
-        this.learpTransition = 0.1
-
-
+        console.log('clips', clips, this.actions)
     }
 
     addIdleAction(clip, root) {
@@ -83,7 +88,6 @@ class CustomMixer extends EventDispatcher {
             duration: clip.duration,
             trackes: []
         }
-
 
         clip.tracks.forEach(track => {
             const [name, target] = track.name.split('.')
@@ -118,9 +122,6 @@ class CustomMixer extends EventDispatcher {
             if (name && target) {
                 // console.log(name, target)
 
-
-
-
                 if (target === "position" || target === "quaternion") {
                     if (name === 'FACIAL_C_LowerLipRotation' && target === "quaternion") {
                         console.log(name, target, track)
@@ -141,8 +142,6 @@ class CustomMixer extends EventDispatcher {
                     this.expressionAction.trackes.push(_a)
                 }
             }
-
-
 
         })
     }
@@ -173,9 +172,9 @@ class CustomMixer extends EventDispatcher {
             }
         })
     }
-    addVisemeAction(clip) {
-
-        const action = {
+    addVisemeAction(clip, body) {
+        // THREE.AnimationUtils.makeClipAdditive(clip);
+        this.visemeAction = {
             time: 0,
             duration: clip.duration,
             trackes: []
@@ -184,7 +183,10 @@ class CustomMixer extends EventDispatcher {
 
         clip.tracks.forEach(track => {
             const [name, target] = track.name.split('.')
-            if (name && target) {
+
+            // console.log(body)
+
+            if (name && target && !body.getObjectByName(name)) {
                 // console.log(name, target)
                 if (target === "position" || target === "quaternion") {
                     const _a = {
@@ -196,7 +198,7 @@ class CustomMixer extends EventDispatcher {
                             position: this.root.getObjectByName(name).position
                         }
                     }
-                    action.trackes.push(_a)
+                    this.visemeAction.trackes.push(_a)
 
                 }
             }
@@ -204,8 +206,6 @@ class CustomMixer extends EventDispatcher {
 
 
         })
-
-        this.visemeAction = action;
 
     }
     updateExpression(value) {
@@ -216,13 +216,43 @@ class CustomMixer extends EventDispatcher {
     updateViseme(value) {
         this.viseme = value
         this.learpViseme = 0
+        // console.log('updateViseme', value)
         // this.visemeAction.time = 0
     }
+
+
+    startIndexAction(index) {
+
+        this.playAction = index
+        this.actionLearp = 0
+        this.viseme = 0
+
+        this.playAudio()
+    }
+
+    playAudio() {
+        if (!this.laughAudio) return
+        this.laughAudio.pause();
+        this.laughAudio.currentTime = 0;
+        this.laughAudio.play();
+    }
+
+    stopAction() {
+        this.playAction = undefined
+        this.actionLearp = 0
+        this.learpTransition = 0
+        this.laughAudio.pause();
+        this.laughAudio.currentTime = 0;
+        this.actions.forEach(action => {
+            action.time = 0
+        })
+        this.onActionEnd()
+    }
+
     update(time) {
         const noise = Math.sin(performance.now() / 100) * 0.02
         // console.log (noise)
         if (!time || !this.visemeAction) return
-
 
         if (this.isExpression) {
             this.learpExpression += 0.003
@@ -238,142 +268,123 @@ class CustomMixer extends EventDispatcher {
             }
         }
 
-
-        // if (this.isExpression) {
-        //     this.learpExpression += 0.005
-        //     if (this.learpExpression > 0.15) {
-        //         this.learpExpression = 0.15
-        //         this.lastExpression = this.expression
-        //     }
-        // } else {
-        //     this.learpExpression -= 0.005
-        //     if (this.learpExpression < 0) {
-        //         this.learpExpression = 0
-
-        //     }
-        // }
-
-
-        this.visemeAction.trackes.forEach((track, i) => {
-            const values = track.interpolant.evaluate(this.viseme)
-
-            if (values.length === 4) {
-                track.target.slerp(new Quaternion(...values), 0.25)
-            } else {
-                track.target.lerp(new Vector3(...values), 0.25)
-            }
-        })
-
-
-        if (this.expressionAction) {
-            // const learpAmout = 0.1
-            const learpAmout = this.isTalking ? 0.05 : this.learpExpression
-
-            this.expressionAction.trackes.forEach((track, i) => {
-                const baseValues = track.interpolant.evaluate(8 / 24)
-                // const learpAmout = this.isExpression ? 0.25 : 0.1
-
-                // if (track.name === 'FACIAL_C_LowerLipRotation') {
-                //     console.log( baseValues)
-                // }
-
-                if (baseValues.length === 4) {
-                    const target = new THREE.Quaternion().slerp(new Quaternion(...baseValues), learpAmout + noise * 0.5) // amount
-                    track.target.multiply(target)
-                } else {
-                    track.target.add(new Vector3(...baseValues).multiplyScalar(learpAmout + noise * 0.5))
-                }
-            })
-        }
-
-
-        if (this.learpTransition < 1) {
-
-            this.learpTransition += 0.05
-            if (this.talkAction) {
-                this.talkAction.time += (time * this.timeScale)
-                this.talkAction.trackes.forEach((track, i) => {
-                    const values = track.interpolant.evaluate(this.talkAction.time)
-                    track.target.set(...values)
-                    if (track.headTarget) {
-                        track.headTarget.set(...values)
-                    }
-                })
-                if (this.talkAction.time > this.talkAction.duration) {
-                    this.talkAction.time = 0
-                }
-            }
+        if (this.actionLearp < 1) {
+            this.actionLearp += 0.001
 
         } else {
-            this.learpTransition = 1
+            this.actionLearp = 1
         }
 
-        if (this.idleAction) {
-            this.idleAction.time += (time * this.timeScale)
-            this.idleAction.trackes.forEach((track, i) => {
-                const values = track.interpolant.evaluate(this.idleAction.time)
-                // track.target.set(...values)
+        if (this.playAction != undefined && this.actions.length) {
+            const clipAction = this.actions[this.playAction]
 
+            if (clipAction) {
 
-                if (values.length === 4) {
-                    track.target.slerp(new Quaternion(...values), this.learpTransition)
-                } else {
-                    track.target.lerp(new Vector3(...values), this.learpTransition)
-                }
-
-                if (track.headTarget) {
-                    if (values.length === 4) {
-                        track.headTarget.slerp(new Quaternion(...values), this.learpTransition)
-                    } else {
-                        track.headTarget.lerp(new Vector3(...values), this.learpTransition)
-                    }
-                }
-            })
-
-            if (this.idleAction.time > this.idleAction.duration) {
-                this.idleAction.time = 0
-            }
-        }
-
-
-
-        if (this.isBlinking) {
-
-            if (this.blinkingAction) {
-                this.blinkingAction.trackes.forEach((track, i) => {
-                    if ((track.name.includes("Eye") || track.name.includes("Forehead")) || track.name.includes("Nose") || track.name.includes("Cheek") || track.name.includes("Temple") || track.name.includes("Pupil")) {
-                        const values = track.interpolant.evaluate(0.9)
+                clipAction.time += (time * this.timeScale)
+                clipAction.trackes.forEach((track, i) => {
+                    const values = track.interpolant.evaluate(clipAction.time)
+                    if (track.target) {
                         if (values.length === 4) {
-                            const target = new THREE.Quaternion().slerp(new Quaternion(...values), 0.6)
-                            track.target.multiply(target)
+                            track.target.slerp(new Quaternion(...values), this.actionLearp)
                         } else {
-                            track.target.add(new Vector3(...values).multiplyScalar(0.6))
+                            track.target.lerp(new Vector3(...values), this.actionLearp)
+                        }
+                    }
+
+                    if (track.headTarget) {
+                        if (values.length === 4) {
+                            track.headTarget.slerp(new Quaternion(...values), this.actionLearp)
+                        } else {
+                            track.headTarget.lerp(new Vector3(...values), this.actionLearp)
+                        }
+                    }
+
+                })
+
+                if (clipAction.time > clipAction.duration) {
+                    clipAction.time = 0
+                    this.playAction = undefined
+                    this.actionLearp = 0
+                    this.stopAction()
+                }
+
+            }
+
+
+        } else {
+
+            if (this.idleAction) {
+                this.idleAction.time += (time * this.timeScale)
+                this.idleAction.trackes.forEach((track, i) => {
+                    const values = track.interpolant.evaluate(this.idleAction.time)
+                    // track.target.set(...values)
+                    if (values.length === 4) {
+                        track.target.slerp(new Quaternion(...values), this.actionLearp)
+                    } else {
+                        track.target.lerp(new Vector3(...values), this.actionLearp)
+                    }
+
+                    if (track.headTarget) {
+                        if (values.length === 4) {
+                            track.headTarget.slerp(new Quaternion(...values), this.actionLearp)
+                        } else {
+                            track.headTarget.lerp(new Vector3(...values), this.actionLearp)
                         }
                     }
                 })
 
+                if (this.idleAction.time > this.idleAction.duration) {
+                    this.idleAction.time = 0
+                }
             }
 
-        } else {
 
+            if (this.visemeAction) {
+                this.visemeAction.trackes.forEach((track, i) => {
+                    const values = track.interpolant.evaluate(this.viseme)
+                    if (values.length === 4) {
+                        track.target.slerp(new Quaternion(...values), 0.25)
+                    } else {
+                        track.target.lerp(new Vector3(...values), 0.25)
+                    }
+                })
+            }
+
+            if (this.expressionAction) {
+                // const learpAmout = 0.1
+                const learpAmout = this.isTalking ? 0.05 : this.learpExpression
+
+                this.expressionAction.trackes.forEach((track, i) => {
+                    const baseValues = track.interpolant.evaluate(8 / 24)
+
+                    if (baseValues.length === 4) {
+                        const target = new THREE.Quaternion().slerp(new Quaternion(...baseValues), learpAmout + noise * 0.5) // amount
+                        track.target.multiply(target)
+                    } else {
+                        track.target.add(new Vector3(...baseValues).multiplyScalar(learpAmout + noise * 0.5))
+                    }
+                })
+            }
+
+            if (this.isBlinking) {
+
+                if (this.blinkingAction) {
+                    this.blinkingAction.trackes.forEach((track, i) => {
+                        if ((track.name.includes("Eye") || track.name.includes("Forehead")) || track.name.includes("Nose") || track.name.includes("Cheek") || track.name.includes("Temple") || track.name.includes("Pupil")) {
+                            const values = track.interpolant.evaluate(0.9)
+                            if (values.length === 4) {
+                                const target = new THREE.Quaternion().slerp(new Quaternion(...values), 0.6)
+                                track.target.multiply(target)
+                            } else {
+                                track.target.add(new Vector3(...values).multiplyScalar(0.6))
+                            }
+                        }
+                    })
+
+                }
+
+            }
         }
-
-        this.neck.rotation.x = 0
-
-        if (this.eyeLook && !this.isTalking) {
-            this.leftEye.quaternion.slerp(this.eyeLook, 0.03)
-            this.rightEye.quaternion.slerp(this.eyeLook, 0.03)
-        } else {
-            this.leftEye.quaternion.slerp(this.eyeLookQuaternion, 0.03)
-            this.rightEye.quaternion.slerp(this.eyeLookQuaternion, 0.03)
-        }
-
-        // if (this.FACIAL_C_LowerLipRotation) {
-        //     // this.leftEye.quaternion.slerp(this.eyeLook, 0.03)
-        //     this.FACIAL_C_LowerLipRotation.quaternion.slerp(this.FACIAL_C_LowerLipRotationQuaternion, 0.005)
-        // }
-
-
     }
 }
 

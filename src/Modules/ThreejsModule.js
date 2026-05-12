@@ -12,6 +12,8 @@ class ThreejsModule {
         this.setLoading = parameters.setLoading
         this.container = parameters.container
         this.setIsPending = parameters.setIsPending
+        this.setAudioReady = parameters.setAudioReady
+
         this.mixer = null
         this.bodyMixer = null
         this.clock = new THREE.Clock()
@@ -52,6 +54,7 @@ class ThreejsModule {
             })
             this.avatariFrame.postDiagnostics({ audioActive: false });
             this.setSpeakStates('loaded')
+
         };
 
         THREE.DefaultLoadingManager.onProgress = (url, itemsLoaded, itemsTotal) => {
@@ -89,6 +92,17 @@ class ThreejsModule {
             this.mixer.isTalking = false;
             console.log('Finished talking');
         }
+
+        this.voiceAssistant.startAction = () => {
+            // this.mixer.startIndexAction(Math.random() > 0.5 ? 0 : 1)
+            console.log('Start action triggered');
+            this.mixer.startIndexAction(0)
+        }
+        this.voiceAssistant.onStopActions = () => {
+            this.mixer.stopAction()
+        }
+
+
         this.avatariFrame = new AvatarToiFrameEvents()
         this.sessionID = ''
         this.init()
@@ -104,6 +118,14 @@ class ThreejsModule {
         this.controls.target.set(0, 1.55, 0)
     }
 
+    playAction(index) {
+        // this.mixer.startIndexAction(Math.random() > 0.5 ? 0 : 1)
+        this.mixer.startIndexAction(1)
+    }
+    stopAction() {
+        this.mixer.stopAction()
+    }
+
     registerBlink() {
         this.mixer.isBlinking = true;
         // 0.25
@@ -117,7 +139,6 @@ class ThreejsModule {
     }
 
     registerEyeLook() {
-
         const rand = Math.random()
         if (rand < 0.25) {
             this.mixer.eyeLook = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.3, 0, 0)) // down
@@ -140,20 +161,13 @@ class ThreejsModule {
 
     registerExpression() {
 
-        // const express = this.randomInt(1, 9) / 24 // 1-4
-        // const express = Math.random() > 0.5 ? 14 / 24 : 8 / 24
         const express = 8 / 24
         this.mixer.updateExpression(express)
         this.mixer.isExpression = true;
-        // this.mixer.expression = express
-        // this.mixer.expression =
         setTimeout(() => {
-            // this.mixer.expression = 0
             this.mixer.updateExpression(0 / 24)
-            // this.mixer.expression = 8 / 24
             this.mixer.isExpression = false
         }, Math.random() * 4000 + 500); // random blink duration between 2-6 seconds
-
         setTimeout(() => {
             this.registerExpression();
         }, Math.random() * 8000 + 1500); // random blink duration between 2-6 seconds
@@ -169,34 +183,29 @@ class ThreejsModule {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
     }
 
-
     loadAssets() {
         this.gltfLoader.load(
-            './assets/gavin_viseme3.glb',
+            './assets/gavin_Face.glb',
             (gltf) => {
                 this.scene.add(gltf.scene)
-                console.log(gltf)
                 this.mixer = new CustomMixer(gltf.scene)
-                // this.mixer.addVisemeAction(gltf.animations[0])
+                this.mixer.onActionEnd = () => {
+                    this.voiceAssistant.onActionEnd()
+                    this.visemeId = 0
+                }
+                this.mixer.onAudioReady = () => {
+                    console.log('Audio is ready to play')
+                    this.setAudioReady(true)
+                }
+                this.mixer.fetchLaughAudio()
+
                 this.registerBlink()
                 this.registerExpression()
                 this.registerEyeLook()
                 const hair = gltf.scene.getObjectByName("Hair_S_Messy_CardsMesh_Group0_LOD0")
                 hair.material.side = THREE.DoubleSide;
-                // this.talkAction = this.mixer.clipAction(gltf.animations[0])
-                // this.talkAction.play()
-                // const skeleton = new THREE.SkeletonHelper(gltf.scene);
-                // this.scene.add(skeleton);
-
 
                 if (this.body) {
-
-                    this.mixer.addTalkAction(this.talkAnimationClip, this.body)
-
-                    // // const action = this.bodyMixer.clipAction(gltf.animations[0])
-                    // // action.play()
-                    // // 710  1550
-
                     this.gltfLoader.load(
                         './assets/gavin_idle.glb',
                         (gltf) => {
@@ -206,32 +215,27 @@ class ThreejsModule {
                     this.gltfLoader.load(
                         './assets/gavin_expression2.glb',
                         (gltfes) => {
-                            console.log(gltfes.animations[0])
-                            // this.mixer.addTalkAction(gltf.animations[0], this.body)
                             this.mixer.addExpressionAction(gltfes.animations[0])
                         }
                     )
                     this.gltfLoader.load(
                         './assets/gavin_viseme2.glb',
                         (gltf) => {
-                            this.mixer.addVisemeAction(gltf.animations[0])
-
-
+                            this.mixer.addVisemeAction(gltf.animations[0], this.body)
 
                         }
                     )
-
-
-
                     this.gltfLoader.load(
                         './assets/gavin_blink.glb',
                         (gltf) => {
-
-                            // this.mixer.addTalkAction(gltf.animations[0], this.body)
                             this.mixer.addBlinkingAction(gltf.animations[0])
-                            // const clip = gltf.animations[0]
-                            // THREE.AnimationUtils.makeClipAdditive( clip );
-                            console.log(gltf.animations[0])
+                        }
+                    )
+
+                    this.gltfLoader.load(
+                        './assets/merged5.glb',
+                        (gltf) => {
+                            this.mixer.addActions(gltf.animations, this.body)
                         }
                     )
 
@@ -256,17 +260,10 @@ class ThreejsModule {
             './assets/gavin_body.glb',
             (gltf) => {
                 this.scene.add(gltf.scene)
-                // this.bodyMixer = new THREE.AnimationMixer(gltf.scene)
-                // const action = this.bodyMixer.clipAction(gltf.animations[0])
-                // action.play()
                 this.body = gltf.scene
-                this.talkAnimationClip = gltf.animations[0]
-
+                gltf.scene.position.set(-0.005, 0, 0.01)
             },
             (e) => {
-                // const progress = (e.loaded / e.total) * 100;
-                // console.log(`GLTF model loading: ${progress.toFixed(2)}%`)
-                // this.setLoading(progress.toFixed(2) + '%')
             },
             (error) => {
                 console.error('Error loading GLTF model:', error)

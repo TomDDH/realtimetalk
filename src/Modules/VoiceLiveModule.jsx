@@ -3,6 +3,7 @@ import { VoiceLiveClient } from "@azure/ai-voicelive";
 import { AzureKeyCredential } from "@azure/core-auth";
 import AvatarToiFrameEvents from "./AvatariFrameEvents";
 import VisemeClip from "./VisemeClip";
+import jokeIntentPhrases from "./jokeIntentPhrases";
 
 class VoiceLiveModule {
     constructor() {
@@ -26,6 +27,9 @@ class VoiceLiveModule {
         this.onTalking = () => { }
         this.onFinishedTalking = () => { }
         this.onMediaCaptureStarted = () => { }
+        this.onStopActions = () => { }
+        this.startAction = () => { }
+
 
         this.collectedVisemeEvents = []
         this.avatariFrame = new AvatarToiFrameEvents();
@@ -43,6 +47,9 @@ class VoiceLiveModule {
         this.isSpeaking = false
 
         this.playAudioContext = new AudioContext();
+
+        this.needAction = false
+        this.jokeString = ''
     }
 
 
@@ -184,6 +191,16 @@ class VoiceLiveModule {
                             this.collectedVisemeEvents = [];
                             this.visemeClip.reset()
                             this.bargeIn = false;
+
+                            if (this.needAction) {
+                                this.startAction()
+                            }
+
+                            break;
+                        case 'onConversationItemInputAudioTranscriptionCompleted':
+                            this.jokeString = this.jokeString + " " + msg.transcript
+
+                            this.checkActionToPlay()
                             break;
                         case 'conversation.item.truncated':
                             this.audioQueue = [];
@@ -217,6 +234,7 @@ class VoiceLiveModule {
                         case 'responseStarted':
                             console.log("Response started:", normalizedEvent);
                             this.avatariFrame.addLog("Server event: response started.", "system");
+
                             break;
                         case 'transcript':
                             console.log("Transcript received:", normalizedEvent);
@@ -251,6 +269,12 @@ class VoiceLiveModule {
                         console.log("Session ended:", msg);
                         this.end()
                         break;
+                    case "userTranscript":
+                        console.log("Received message from WebSocket:", msg);
+
+                        this.jokeString = this.jokeString + " " + msg.text
+                        this.checkActionToPlay()
+                        break;
                     default:
                         this.avatariFrame.addLog(`Server: ${msg.type ?? "unknown event"}`, "system");
                         console.log("Received message from WebSocket:", msg);
@@ -270,24 +294,38 @@ class VoiceLiveModule {
 
     sendGreeting() {
         console.log("send greeting message")
-
         this.ws.send(JSON.stringify({ type: "sendText", text: "hello, Who are you?" }));
         this.avatariFrame.addLog(`You: sendText (hello, Who are you?)`, "system");
-        // this.avatariFrame.addLog(`You: sendText (${message})`, "system");
-        // this.session.sendEvent({
-        //     type: 'response.create',
-        //     response: {
-        //         preGeneratedAssistantMessage: {
-        //             content: [
-        //                 {
-        //                     type: "text",
-        //                     text: this.config.welcomeMessage || "Hello! I'm your AI assistant. How can I help you today?"
-        //                 }
-        //             ]
-        //         }
-        //     }
-        // })
+
     }
+    onActionEnd() {
+        this.needAction = false
+        this.startAudioPlayback()
+    }
+
+    checkActionToPlay() {
+        console.log("checkActionToPlay", this.jokeString)
+        const normalized = this.jokeString
+            .toLowerCase()
+            .replace(/[^\w\s]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+
+        const jokePhrases = jokeIntentPhrases.map(p =>
+            p
+                .toLowerCase()
+                .replace(/[^\w\s]/g, '')
+                .replace(/\s+/g, ' ')
+                .trim()
+        )
+
+        console.log("check joke intent detected, will play action after response", jokePhrases.some(phrase => normalized.includes(phrase)))
+        if (jokePhrases.some(phrase => normalized.includes(phrase))) {
+            this.needAction = true;
+
+        }
+    }
+
     async playAudioChunk(audioData) {
         if (!this.playAudioContext) {
             console.warn('AudioContext not available for audio playback');
@@ -315,7 +353,7 @@ class VoiceLiveModule {
             // Add to audio queue instead of playing immediately
             this.audioQueue.push(audioBuffer);
 
-            if (!this.isPlayingAudio) {
+            if (!this.isPlayingAudio && !this.needAction) {
                 this.startAudioPlayback();
             }
 
@@ -329,10 +367,12 @@ class VoiceLiveModule {
             return;
         }
 
+
         this.isPlayingAudio = true;
 
         this.onTalking()
 
+        this.jokeString = ' '
         this.nextVisemeStartTimeMs = 0
 
         console.log("start play audio", performance.now())

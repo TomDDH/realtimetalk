@@ -234,9 +234,14 @@ class VoiceLiveModule {
                         case 'responseStarted':
                             console.log("Response started:", normalizedEvent);
                             this.avatariFrame.addLog("Server event: response started.", "system");
-
                             break;
                         case 'transcript':
+                            if (data.event.speaker === "assistant") {
+                                this.avatariFrame.addLog(`AI output: ${data.event.text}`, "system");
+                            } else {
+                                this.avatariFrame.addLog(`You said: ${data.event.text}`, "system");
+
+                            }
                             console.log("Transcript received:", normalizedEvent);
                             break;
                         case 'responseCompleted':

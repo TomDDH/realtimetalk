@@ -173,6 +173,7 @@ class CustomMixer extends EventDispatcher {
         if (this.laughAudio || !url) return
         // this.laughAudio = new Audio('./assets/audio/preview.mp3');
         this.laughAudio = new Audio(url);
+        console.log("Fetching laugh audio from URL:", this.laughAudio.setSinkId);
         this.onAudioReady()
     }
     async updateSettings(payload) {

@@ -61,6 +61,8 @@ class VoiceLiveModule {
         const devices = await navigator.mediaDevices.enumerateDevices();
         const speakers = devices.filter(d => d.kind === 'audiooutput');
         console.log('Available audio output devices:', speakers);
+
+
     }
 
 
@@ -208,15 +210,15 @@ class VoiceLiveModule {
                             this.visemeClip.reset()
                             this.bargeIn = false;
 
-                            if (this.needAction) {
-                                this.startAction()
-                            }
+                            // if (this.needAction) {
+                            //     this.startAction()
+                            // }
 
                             break;
                         case 'onConversationItemInputAudioTranscriptionCompleted':
                             this.jokeString = this.jokeString + " " + msg.transcript
 
-                            this.checkActionToPlay()
+                            // this.checkActionToPlay()
                             break;
                         case 'conversation.item.truncated':
                             this.audioQueue = [];
@@ -294,7 +296,7 @@ class VoiceLiveModule {
                         console.log("Received message from WebSocket:", msg);
 
                         this.jokeString = this.jokeString + " " + msg.text
-                        this.checkActionToPlay()
+                        // this.checkActionToPlay()
                         break;
                     default:
                         this.avatariFrame.addLog(`Server: ${msg.type ?? "unknown event"}`, "system");

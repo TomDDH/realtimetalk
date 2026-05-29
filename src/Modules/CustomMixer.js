@@ -12,7 +12,7 @@ class CustomMixer extends EventDispatcher {
         this.animations = animations
         this.expressionFame = expressionFame
 
-        console.log({animations})
+        console.log({ animations })
 
         this.timeScale = 1
 
@@ -174,6 +174,15 @@ class CustomMixer extends EventDispatcher {
         // this.laughAudio = new Audio('./assets/audio/preview.mp3');
         this.laughAudio = new Audio(url);
         this.onAudioReady()
+    }
+    async updateSettings(payload) {
+
+        const setting = payload?.settings || {}
+        if (setting.speakerDeviceId) {
+            console.log('CustomMixer received settings update:', payload)
+            await this.laughAudio.setSinkId(setting.speakerDeviceId)
+        }
+
     }
 
     playAudio() {

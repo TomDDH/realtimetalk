@@ -244,9 +244,12 @@ class ThreejsModule {
             }
 
         })
+        this.mixer.updateSettings(payload)
     }
     updateSettings(payload) {
+        console.log('Updating settings with payload:', payload)
         this.voiceAssistant.updateSettings(payload)
+        this.mixer.updateSettings(payload)
     }
     stopConnection() {
         this.sessionID = null

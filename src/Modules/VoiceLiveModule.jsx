@@ -53,7 +53,7 @@ class VoiceLiveModule {
 
         this.isMuted = false
 
-        // this.test()
+        this.test()
 
     }
 
@@ -569,10 +569,10 @@ class VoiceLiveModule {
                 this.ws.send(JSON.stringify({ type: "sendAudioChunk", audio }));
             };
 
-            if (!this.greetingSent) {
-                this.greetingSent = true
-                this.sendGreeting()
-            }
+            // if (!this.greetingSent) {
+            //     this.greetingSent = true
+            //     this.sendGreeting()
+            // }
 
             this.avatariFrame.mediaStatus = 'ready'
             this.avatariFrame.mediaErrorMessage = ''

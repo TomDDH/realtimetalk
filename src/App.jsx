@@ -2,6 +2,7 @@ import { useRef, useEffect, useState } from 'react'
 import './App.css'
 import ThreejsModule from './Modules/ThreejsModule'
 import EventsHandler from './EventsHandler'
+import Speeker from './Speeker'
 
 function App() {
 
@@ -110,6 +111,7 @@ function App() {
     <>
 
       <EventsHandler threeModuleRef={threeModuleRef} />
+      <Speeker threeModuleRef={threeModuleRef} />
       {
         loading != 'done' &&
         <div

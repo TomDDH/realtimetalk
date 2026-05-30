@@ -37,9 +37,6 @@ function EventsHandler({ threeModuleRef }) {
                 case 'updateSettings':
                     avatarThreejs.updateSettings(payload)
                     break;
-                case 'avatarLaugh':
-                    avatarThreejs.avatarLaugh(payload)
-                    break;
                 default:
                     break;
             }

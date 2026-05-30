@@ -29,6 +29,7 @@ class VoiceLiveModule {
         this.onMediaCaptureStarted = () => { }
         this.onStopActions = () => { }
         this.startAction = () => { }
+        this.onAvatarLaugh = () => { }
 
 
         this.collectedVisemeEvents = []
@@ -292,6 +293,9 @@ class VoiceLiveModule {
                         console.log("Session ended:", msg);
                         this.end()
                         break;
+                    case "avatarLaugh":
+                        this.onAvatarLaugh(msg)
+                        break;
                     case "userTranscript":
                         console.log("Received message from WebSocket:", msg);
 
@@ -518,7 +522,7 @@ class VoiceLiveModule {
         try {
             this.mediaStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
-                    deviceId: settings?.audioInputDeviceId ? { exact: settings.audioInputDeviceId } : undefined,
+                    deviceId: settings?.microphoneDeviceId ? { exact: settings.microphoneDeviceId } : undefined,
                     channelCount: this.targetChannels,
                     sampleRate: this.targetSampleRate,
                     echoCancellation: true,

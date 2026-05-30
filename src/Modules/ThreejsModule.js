@@ -103,6 +103,9 @@ class ThreejsModule {
         this.voiceAssistant.onStopActions = () => {
             this.mixer.stopAction()
         }
+        this.voiceAssistant.onAvatarLaugh = () => {
+            this.avatarLaugh()
+        }
 
         this.avatariFrame = new AvatarToiFrameEvents()
         this.sessionID = ''

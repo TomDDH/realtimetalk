@@ -494,18 +494,20 @@ class VoiceLiveModule {
         const settings = payload.settings || {}
 
         if (settings?.speakerDeviceId != undefined) {
-            // await this.audioContext.setSinkId(settings.microphoneDeviceId);
             await this.playAudioContext.setSinkId(settings.speakerDeviceId);
         }
 
         if (settings?.microphoneDeviceId != undefined) {
-            await this.audioContext.setSinkId(settings.microphoneDeviceId);
-            // this.applyMicrophoneMute(settings.microphoneMuted);
-        }
+            this.stream.getTracks().forEach(track => track.stop());
+            this.scriptProcessor.disconnect();
+            this.analyserNode.disconnect();
+            this.audioContext.close();
+            await this.start(settings)
 
-        if (settings?.microphoneMuted != undefined) {
+        } else if (settings?.speakerDeviceId != undefined) {
             this.applyMicrophoneMute(settings.microphoneMuted);
         }
+
     }
     applyMicrophoneMute(muted) {
 
@@ -535,12 +537,6 @@ class VoiceLiveModule {
                 // await this.audioContext.setSinkId(settings.microphoneDeviceId);
                 await this.playAudioContext.setSinkId(settings.speakerDeviceId);
             }
-
-            if (settings?.microphoneDeviceId != undefined) {
-                await this.audioContext.setSinkId(settings.microphoneDeviceId);
-                // this.applyMicrophoneMute(settings.microphoneMuted);
-            }
-
 
             if (settings?.microphoneMuted != undefined) {
                 this.applyMicrophoneMute(settings.microphoneMuted);

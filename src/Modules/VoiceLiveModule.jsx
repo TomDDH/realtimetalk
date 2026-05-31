@@ -48,6 +48,18 @@ class VoiceLiveModule {
         this.isSpeaking = false
 
         this.playAudioContext = new AudioContext();
+        this.playerProcessor = this.playAudioContext.createScriptProcessor(1024, 1, 1);
+        this.playerProcessor.connect(this.playAudioContext.destination);
+
+        // this.playerProcessor.onaudioprocess = (event) => {
+        //     const channel0 = event.inputBuffer.getChannelData(0);
+
+        //     if (!channel0.every(sample => sample === 0)) {
+        //         console.log(Array.from(channel0), "Audio playback started");
+        //     }
+        //     // Analyze samples
+
+        // };
 
         this.needAction = false
         this.jokeString = ''
@@ -437,6 +449,8 @@ class VoiceLiveModule {
         const source = this.playAudioContext.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(this.playAudioContext.destination);
+        source.connect(this.playerProcessor);
+
 
         // Track this source for potential barge-in interruption
         this.currentAudioSources.push(source);
@@ -497,8 +511,8 @@ class VoiceLiveModule {
             await this.playAudioContext.setSinkId(settings.speakerDeviceId);
         }
 
-        if (settings?.microphoneDeviceId != undefined) {
-            this.stream.getTracks().forEach(track => track.stop());
+        if (settings?.microphoneDeviceId != undefined && this.mediaStream) {
+            this.mediaStream.getTracks().forEach(track => track.stop());
             this.scriptProcessor.disconnect();
             this.analyserNode.disconnect();
             this.audioContext.close();

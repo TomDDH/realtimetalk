@@ -430,7 +430,7 @@ class CustomMixer extends EventDispatcher {
             this.currentNeckTarget.copy(this.neutralNeck)
         }
 
-        if (this.isLooking) {
+        if (this.isLooking && !this.viseme) {
             const progress = Math.min((currentTime - this.lookStartTime) / (this.lookDuration * 0.3), 1)
             const smoothProgress = 0.5 * (1 - Math.cos(Math.PI * progress))
 

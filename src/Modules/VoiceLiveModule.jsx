@@ -38,6 +38,8 @@ class VoiceLiveModule {
         this.greetingSent = false;
 
         this.bargeIn = false;
+        this.currentResponseId = null;
+        this.interruptedResponseIds = new Set();
 
 
         this.sessionTimeout = null;
@@ -48,18 +50,6 @@ class VoiceLiveModule {
         this.isSpeaking = false
 
         this.playAudioContext = new AudioContext();
-        this.playerProcessor = this.playAudioContext.createScriptProcessor(1024, 1, 1);
-        this.playerProcessor.connect(this.playAudioContext.destination);
-
-        // this.playerProcessor.onaudioprocess = (event) => {
-        //     const channel0 = event.inputBuffer.getChannelData(0);
-
-        //     if (!channel0.every(sample => sample === 0)) {
-        //         console.log(Array.from(channel0), "Audio playback started");
-        //     }
-        //     // Analyze samples
-
-        // };
 
         this.needAction = false
         this.jokeString = ''
@@ -80,6 +70,10 @@ class VoiceLiveModule {
 
 
     handleVisemDelta(event) {
+        if (this.shouldIgnoreAssistantDelta(event)) {
+            return;
+        }
+
         // console.log("handle audio delta event:", event);
         const animation = event;
         const audioOffsetInMs = animation.audioOffsetInMs
@@ -89,12 +83,95 @@ class VoiceLiveModule {
     }
 
     async handleAudioDelta(event) {
+        if (this.shouldIgnoreAssistantDelta(event)) {
+            return;
+        }
+
         // console.log("handle audio delta event:", event);
         const audioBase64 = event.delta;
         const samples = this.base64Pcm16ToFloat32(audioBase64);
         await this.playAudioChunk(samples);
 
     }
+    shouldIgnoreAssistantDelta(event) {
+        const responseId = this.getResponseId(event);
+        if (responseId && this.interruptedResponseIds.has(responseId)) {
+            return true;
+        }
+
+        return this.bargeIn;
+    }
+
+    getResponseId(event) {
+        if (!event || typeof event !== "object") {
+            return null;
+        }
+
+        if (typeof event.response_id === "string") {
+            return event.response_id;
+        }
+
+        if (typeof event.responseId === "string") {
+            return event.responseId;
+        }
+
+        if (event.response && typeof event.response === "object" && typeof event.response.id === "string") {
+            return event.response.id;
+        }
+
+        return null;
+    }
+
+    handleAssistantResponseCreated(message) {
+        this.currentResponseId = this.getResponseId(message?.event) ?? this.getResponseId(message);
+        this.collectedVisemeEvents = [];
+        this.visemeClip.reset()
+        this.bargeIn = false;
+    }
+
+    interruptAssistantPlayback(reason, message = {}) {
+        const responseId = this.getResponseId(message?.event) ?? this.getResponseId(message) ?? this.currentResponseId;
+        if (responseId) {
+            this.interruptedResponseIds.add(responseId);
+        }
+
+        this.currentAudioSources.forEach(source => {
+            try {
+                source.onended = null;
+                source.stop();
+            } catch (error) {
+                // Source might already be stopped, ignore the error
+            }
+        });
+
+        this.currentAudioSources = [];
+        this.audioQueue = [];
+        this.clearPendingVisemes();
+        this.updateViseme(0);
+        this.visemeClip.reset()
+        this.bargeIn = true;
+        this.isPlayingAudio = false;
+        this.nextVisemeStartTimeMs = 0;
+        this.chunkStartTime = 0;
+
+        if (this.playAudioContext) {
+            this.nextAudioStartTime = this.playAudioContext.currentTime;
+        }
+
+        this.assistantSpeakingMessage = ''
+        this.onFinishedTalking()
+        this.avatariFrame.addLog(reason, "system");
+    }
+
+    clearPendingVisemes() {
+        this.collectedVisemeEvents.forEach(ev => {
+            if (ev?.timeout) {
+                clearTimeout(ev.timeout);
+            }
+        })
+        this.collectedVisemeEvents = [];
+    }
+
     base64Pcm16ToFloat32(base64) {
         const buffer = this.decodeBase64ToArrayBuffer(base64);
         if (!buffer) {
@@ -219,9 +296,7 @@ class VoiceLiveModule {
                             this.handleAudioDelta(msg.event);
                             break;
                         case 'response.created':
-                            this.collectedVisemeEvents = [];
-                            this.visemeClip.reset()
-                            this.bargeIn = false;
+                            this.handleAssistantResponseCreated(msg);
 
                             // if (this.needAction) {
                             //     this.startAction()
@@ -233,23 +308,15 @@ class VoiceLiveModule {
 
                             // this.checkActionToPlay()
                             break;
+                        case 'input_audio_buffer.speech_started':
+                            this.interruptAssistantPlayback("User speech detected; stopping avatar playback.", msg);
+                            break;
                         case 'conversation.item.truncated':
-                            this.audioQueue = [];
-                            this.collectedVisemeEvents.forEach(ev => {
-                                if (ev?.timeout) {
-                                    clearTimeout(ev?.timeout);
-                                }
-                            })
-                            this.updateViseme(0);
-                            this.collectedVisemeEvents = [];
-                            this.bargeIn = true;
-                            this.assistantSpeakingMessage = ''
-
                             const itemId = typeof msg.itemId === "string" ? msg.itemId : "";
                             const audioEndMs = Number.isFinite(msg.audioEndMs) ? msg.audioEndMs : null;
                             const suffix = itemId ? ` Item: ${itemId}${audioEndMs === null ? "" : `, audioEndMs: ${audioEndMs}`}.` : "";
 
-                            this.avatariFrame.addLog(`Azure truncated the avatar response.${suffix}`, "system");
+                            this.interruptAssistantPlayback(`Azure truncated the avatar response.${suffix}`, msg);
 
                             break;
                         default:
@@ -449,8 +516,6 @@ class VoiceLiveModule {
         const source = this.playAudioContext.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(this.playAudioContext.destination);
-        source.connect(this.playerProcessor);
-
 
         // Track this source for potential barge-in interruption
         this.currentAudioSources.push(source);
@@ -507,18 +572,19 @@ class VoiceLiveModule {
     async updateSettings(payload) {
         const settings = payload.settings || {}
 
-        if (settings?.speakerDeviceId != undefined) {
-            await this.playAudioContext.setSinkId(settings.speakerDeviceId);
-        }
+        // if (settings?.speakerDeviceId != undefined) {
+        //     await this.playAudioContext.setSinkId(settings.speakerDeviceId);
+        // }
 
-        if (settings?.microphoneDeviceId != undefined && this.mediaStream) {
-            this.mediaStream.getTracks().forEach(track => track.stop());
-            this.scriptProcessor.disconnect();
-            this.analyserNode.disconnect();
-            this.audioContext.close();
-            await this.start(settings)
+        // if (settings?.microphoneDeviceId != undefined) {
+        //     this.stream.getTracks().forEach(track => track.stop());
+        //     this.scriptProcessor.disconnect();
+        //     this.analyserNode.disconnect();
+        //     this.audioContext.close();
+        //     await this.start(settings)
+        // } 
 
-        } else if (settings?.speakerDeviceId != undefined) {
+        if (settings?.microphoneMuted != undefined) {
             this.applyMicrophoneMute(settings.microphoneMuted);
         }
 
@@ -700,6 +766,7 @@ class VoiceLiveModule {
     clearAudioQueue() {
         this.currentAudioSources.forEach(source => {
             try {
+                source.onended = null;
                 source.stop();
             } catch (error) {
                 // Source might already be stopped, ignore the error
@@ -708,7 +775,11 @@ class VoiceLiveModule {
         this.currentAudioSources = [];
         this.audioQueue = [];
         this.isPlayingAudio = false;
-        this.nextAudioStartTime = this.audioContext.currentTime;
+        this.clearPendingVisemes();
+        this.updateViseme(0);
+        if (this.playAudioContext) {
+            this.nextAudioStartTime = this.playAudioContext.currentTime;
+        }
     }
 
     normalizeServerEvent(message) {

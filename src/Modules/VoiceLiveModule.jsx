@@ -569,12 +569,28 @@ class VoiceLiveModule {
 
     }
 
+    async applySpeakerDevice(speakerDeviceId) {
+        if (!speakerDeviceId) return
+
+        if (!this.playAudioContext?.setSinkId) {
+            console.warn("Audio output device selection is not supported in this browser.")
+            return
+        }
+
+        try {
+            await this.playAudioContext.setSinkId(speakerDeviceId)
+        } catch (error) {
+            console.warn("Failed to set audio output device:", error)
+        }
+    }
+
     async updateSettings(payload) {
         const settings = payload.settings || {}
 
-        // if (settings?.speakerDeviceId != undefined) {
-        //     await this.playAudioContext.setSinkId(settings.speakerDeviceId);
-        // }
+        if (settings?.speakerDeviceId != undefined) {
+            // await this.playAudioContext.setSinkId(settings.speakerDeviceId);
+            this.applySpeakerDevice(settings.speakerDeviceId)
+        }
 
         // if (settings?.microphoneDeviceId != undefined) {
         //     this.stream.getTracks().forEach(track => track.stop());
@@ -583,6 +599,7 @@ class VoiceLiveModule {
         //     this.audioContext.close();
         //     await this.start(settings)
         // } 
+
 
         if (settings?.microphoneMuted != undefined) {
             this.applyMicrophoneMute(settings.microphoneMuted);
@@ -615,7 +632,8 @@ class VoiceLiveModule {
 
             if (settings?.speakerDeviceId != undefined) {
                 // await this.audioContext.setSinkId(settings.microphoneDeviceId);
-                await this.playAudioContext.setSinkId(settings.speakerDeviceId);
+                // await this.playAudioContext.setSinkId(settings.speakerDeviceId);
+                this.applySpeakerDevice(settings.speakerDeviceId)
             }
 
             if (settings?.microphoneMuted != undefined) {

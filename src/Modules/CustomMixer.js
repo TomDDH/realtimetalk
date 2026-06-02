@@ -179,7 +179,7 @@ class CustomMixer extends EventDispatcher {
     async updateSettings(payload) {
 
         const setting = payload?.settings || {}
-        if (setting.speakerDeviceId) {
+        if (setting.speakerDeviceId && this.laughAudio?.setSinkId) {
             console.log('CustomMixer received settings update:', payload)
             await this.laughAudio.setSinkId(setting.speakerDeviceId)
         }

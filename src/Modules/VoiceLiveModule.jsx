@@ -123,18 +123,19 @@ class VoiceLiveModule {
     }
 
     handleAssistantResponseCreated(message) {
-        this.currentResponseId = this.getResponseId(message?.event) ?? this.getResponseId(message);
+        const responseId = this.getResponseId(message?.event) ?? this.getResponseId(message);
+        const hasStalePlayback = this.audioQueue.length > 0 || this.currentAudioSources.length > 0 || this.isPlayingAudio;
+        if (hasStalePlayback) {
+            this.clearStaleAssistantPlayback();
+        }
+        this.currentResponseId = responseId;
         this.collectedVisemeEvents = [];
         this.visemeClip.reset()
         this.bargeIn = false;
     }
 
-    interruptAssistantPlayback(reason, message = {}) {
-        const responseId = this.getResponseId(message?.event) ?? this.getResponseId(message) ?? this.currentResponseId;
-        if (responseId) {
-            this.interruptedResponseIds.add(responseId);
-        }
-
+    clearAssistantPlayback({ notifyFinishedTalking = false, forceNotifyFinishedTalking = false } = {}) {
+        const hadActivePlayback = this.isPlayingAudio || this.currentAudioSources.length > 0;
         this.currentAudioSources.forEach(source => {
             try {
                 source.onended = null;
@@ -149,7 +150,6 @@ class VoiceLiveModule {
         this.clearPendingVisemes();
         this.updateViseme(0);
         this.visemeClip.reset()
-        this.bargeIn = true;
         this.isPlayingAudio = false;
         this.nextVisemeStartTimeMs = 0;
         this.chunkStartTime = 0;
@@ -158,8 +158,24 @@ class VoiceLiveModule {
             this.nextAudioStartTime = this.playAudioContext.currentTime;
         }
 
+        if (notifyFinishedTalking && (hadActivePlayback || forceNotifyFinishedTalking)) {
+            this.onFinishedTalking()
+        }
+    }
+
+    clearStaleAssistantPlayback() {
+        this.clearAssistantPlayback({ notifyFinishedTalking: true });
+    }
+
+    interruptAssistantPlayback(reason, message = {}) {
+        const responseId = this.getResponseId(message?.event) ?? this.getResponseId(message) ?? this.currentResponseId;
+        if (responseId) {
+            this.interruptedResponseIds.add(responseId);
+        }
+
+        this.clearAssistantPlayback({ notifyFinishedTalking: true, forceNotifyFinishedTalking: true });
+        this.bargeIn = true;
         this.assistantSpeakingMessage = ''
-        this.onFinishedTalking()
         this.avatariFrame.addLog(reason, "system");
     }
 

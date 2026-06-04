@@ -172,8 +172,9 @@ class CustomMixer extends EventDispatcher {
     async fetchLaughAudio(url) {
         if (this.laughAudio || !url) return
         // this.laughAudio = new Audio('./assets/audio/preview.mp3');
-        this.laughAudio = new Audio(url);
-        console.log("Fetching laugh audio from URL:", this.laughAudio.setSinkId);
+        // this.laughAudio = new Audio(url);
+        // console.log("Fetching laugh audio from URL:", url);
+        console.log("Skipping fetching laugh audio");
         this.onAudioReady()
     }
     async updateSettings(payload) {
@@ -193,6 +194,7 @@ class CustomMixer extends EventDispatcher {
         this.laughAudio.play();
     }
     stopAudio() {
+        if (!this.laughAudio) return
         this.laughAudio.pause();
         this.laughAudio.currentTime = 0;
     }
